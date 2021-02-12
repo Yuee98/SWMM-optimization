@@ -4,7 +4,7 @@ from file_io import read_params, edit_params, vec_to_params, params_to_vec
 from obj import objectivefunctions, readobservationfile
 from matplotlib import pyplot as plt
 import multiprocessing
-global kwargs 
+global kwargs # 并行用全局变量字典
 kwargs = {}
 BOUNDRY = [
         [0,     100],
@@ -18,6 +18,8 @@ BOUNDRY = [
 POPULATION_SIZE = 145*7 # 每轮生成多少个候选，最少145*7=维度
 EPOCHS = 100 # 轮数
 NUM_WORKERS = 4 # 并行计算数量，一般等于CPU核心，机械硬盘4大概到读写上限了，固态硬盘可以更高
+LOAD_CONTINUE = -1 # 是否继续之前的优化, -1 从头开始
+assert LOAD_CONTINUE+1 < EPOCHS
 
 def plot(max, average, save_path):
     plt.clf()
@@ -34,31 +36,33 @@ def work(i, vec):
     save_path = kwargs['path']/str(kwargs['ep'])/f'{kwargs["ep"]}_{i}.inp'
     edit_params(params, save_path, './ref/0210.inp')
     result = objectivefunctions(str(save_path), kwargs['time_difference'], kwargs['obs_data'], root='J14')
-    logging.info(f'ep: {kwargs["ep"]} | solution: {kwargs["ep"]}_{i} | mNSE: {result}')
+    logging.info(f'ep: {kwargs["ep"]} | solution: {kwargs["ep"]}_{i} | NSE: {result}')
     return result
 
 
-def main():
-    logging.basicConfig(level=logging.INFO, filename='./optimize.log',
-                    format='%(asctime)s: %(message)s')
-
-
-    boundry = numpy.array(BOUNDRY).astype('float32')
-    init_params = read_params('./ref/0210.inp')
-    init_vec = params_to_vec(init_params, boundry)
-
-    es = cma.CMAEvolutionStrategy(init_vec, 0.5, inopts={
-        'BoundaryHandler': BoundTransform,
-        'bounds': [[0], [10]]})
-
-    time_difference, obs_data = readobservationfile('./ref/Node14.dat')
+def main():  
     path = pathlib.Path('./')
     if not (path/'fig').exists():
         os.mkdir(path/'fig')
     if not (path/'save').exists():
         os.mkdir(path/'save')
-    Max, Avg = [], []
-    for ep in range(EPOCHS):
+    logging.basicConfig(level=logging.INFO, filename=path/'optimize.log',
+                    format='%(asctime)s: %(message)s')
+
+    if LOAD_CONTINUE == -1:
+        boundry = numpy.array(BOUNDRY).astype('float32')
+        init_params = read_params('./ref/0210.inp')
+        init_vec = params_to_vec(init_params, boundry)
+        es = cma.CMAEvolutionStrategy(init_vec, 1, inopts={
+            'BoundaryHandler': BoundTransform,
+            'bounds': [[0], [10]]})
+        Max, Avg = [], []
+    elif LOAD_CONTINUE > -1:
+        with open(path/'save'/f'{str(LOAD_CONTINUE)}.pkl', 'rb') as f:
+            es, Max, Avg = pickle.load(f)
+    
+    time_difference, obs_data = readobservationfile(path/'ref'/'Node14.dat')
+    for ep in range(LOAD_CONTINUE+1, EPOCHS):
         logging.info('==='*20+f'ep:{ep}'+'==='*20)
         if not (path/str(ep)).exists():
             os.mkdir(path/str(ep))
@@ -82,7 +86,7 @@ def main():
         logging.info(f'ep {ep} best {ep}_{index}: {results[index]}')
         plot(Max, Avg, path/'fig'/f'{ep}.png')
         with open(path/'save'/f'{ep}.pkl', 'wb') as f:
-            pickle.dump((es, candidates, results), f)
+            pickle.dump((es, Max, Avg), f)
 
         rewards = - results
         es.tell(candidates, rewards)
